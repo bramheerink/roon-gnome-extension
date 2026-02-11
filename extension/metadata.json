@@ -1,0 +1,9 @@
+{
+  "uuid": "roon@gnome.extensions",
+  "name": "Roon Music Controller",
+  "description": "Control Roon music player from the GNOME panel",
+  "version": 1,
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/roon-gnome-extension",
+  "settings-schema": "org.gnome.shell.extensions.roon"
+}

@@ -1,0 +1,4 @@
+node_modules/
+bridge/config.json
+.claude/
+extension/schemas/gschemas.compiled

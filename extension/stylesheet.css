@@ -1,0 +1,99 @@
+/* Panel styling */
+.roon-panel-box {
+    spacing: 6px;
+}
+
+.roon-panel-label {
+    margin-left: 4px;
+    margin-right: 4px;
+}
+
+.roon-panel-button {
+    padding: 4px;
+    border-radius: 4px;
+}
+
+.roon-panel-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.roon-panel-button:active {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Popup - top section with album art + info side by side */
+.roon-top-box {
+    spacing: 12px;
+    padding: 8px;
+}
+
+.roon-album-art-bin {
+    padding: 0;
+}
+
+.roon-album-art {
+    border-radius: 6px;
+}
+
+.roon-album-art-image {
+    border-radius: 6px;
+}
+
+.roon-right-box {
+    spacing: 4px;
+    padding: 4px 0;
+}
+
+.roon-title-label {
+    font-size: 13px;
+    font-weight: bold;
+}
+
+.roon-artist-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.roon-album-label {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.6);
+}
+
+/* Control buttons - compact */
+.roon-controls-box {
+    spacing: 8px;
+    padding: 4px 0;
+}
+
+.roon-control-button {
+    padding: 4px;
+    border-radius: 50%;
+}
+
+.roon-control-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.roon-control-button:active {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Zones section */
+.roon-zones-container {
+    spacing: 8px;
+    padding: 4px 0;
+}
+
+.roon-zone-box {
+    spacing: 8px;
+    padding: 4px 8px;
+}
+
+.roon-zone-state-icon {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.roon-zone-label {
+    font-size: 11px;
+    min-width: 80px;
+}

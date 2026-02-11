@@ -1,0 +1,18 @@
+{
+  "name": "roon-mpris-bridge",
+  "version": "1.0.0",
+  "description": "Bridge between Roon and MPRIS D-Bus interface",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-roon-api": "github:roonlabs/node-roon-api",
+    "node-roon-api-transport": "github:roonlabs/node-roon-api-transport",
+    "node-roon-api-image": "github:roonlabs/node-roon-api-image",
+    "node-roon-api-status": "github:roonlabs/node-roon-api-status",
+    "dbus-next": "^0.10.2",
+    "express": "^4.18.2"
+  }
+}

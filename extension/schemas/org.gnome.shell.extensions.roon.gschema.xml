@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.roon" path="/org/gnome/shell/extensions/roon/">
+    <key name="label-max-length" type="i">
+      <default>40</default>
+      <summary>Maximum panel label length</summary>
+      <description>Maximum number of characters to show in the panel label before truncating</description>
+    </key>
+    <key name="show-controls-in-panel" type="b">
+      <default>true</default>
+      <summary>Show controls in panel</summary>
+      <description>Whether to show play/pause and next buttons in the panel</description>
+    </key>
+  </schema>
+</schemalist>

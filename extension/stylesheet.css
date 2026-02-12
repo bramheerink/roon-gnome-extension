@@ -1,11 +1,26 @@
-/* Panel styling */
+/*
+ * Dieter Rams principles applied to GNOME Shell:
+ * Good design is as little design as possible.
+ * White space is an active element.
+ * Nothing shouts. Nothing competes.
+ */
+
+/* Panel — quiet, functional */
 .roon-panel-box {
-    spacing: 6px;
+    spacing: 8px;
 }
 
 .roon-panel-label {
-    margin-left: 4px;
-    margin-right: 4px;
+    margin-left: 6px;
+    margin-right: 6px;
+    min-width: 120px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.roon-panel-art {
+    margin: 0 2px;
+    border-radius: 2px;
 }
 
 .roon-panel-button {
@@ -14,86 +29,211 @@
 }
 
 .roon-panel-button:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: rgba(255, 255, 255, 0.08);
 }
 
 .roon-panel-button:active {
-    background-color: rgba(255, 255, 255, 0.2);
+    background-color: rgba(255, 255, 255, 0.12);
 }
 
-/* Popup - top section with album art + info side by side */
+/* Tooltip — factual, unobtrusive */
+.roon-panel-tooltip {
+    background-color: rgba(0, 0, 0, 0.9);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 13px;
+    font-weight: 400;
+    padding: 6px 10px;
+    border-radius: 4px;
+}
+
+/* Popup — fixed proportion */
+.roon-popup-menu {
+    min-width: 340px;
+    max-width: 340px;
+}
+
+/* Wider popup when browsing library */
+.roon-popup-menu-wide {
+    min-width: 500px;
+    max-width: 500px;
+}
+
+/* Now playing — compact, pure info */
 .roon-top-box {
     spacing: 12px;
-    padding: 8px;
+    padding: 10px 16px;
 }
 
 .roon-album-art-bin {
     padding: 0;
 }
 
-.roon-album-art {
-    border-radius: 6px;
-}
-
+.roon-album-art,
 .roon-album-art-image {
-    border-radius: 6px;
+    border-radius: 4px;
 }
 
 .roon-right-box {
     spacing: 4px;
-    padding: 4px 0;
+    padding: 0;
 }
 
 .roon-title-label {
-    font-size: 13px;
-    font-weight: bold;
+    font-size: 16px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
 }
 
 .roon-artist-label {
-    font-size: 11px;
-    color: rgba(255, 255, 255, 0.8);
-}
-
-.roon-album-label {
-    font-size: 10px;
+    font-size: 14px;
+    font-weight: 400;
     color: rgba(255, 255, 255, 0.6);
 }
 
-/* Control buttons - compact */
-.roon-controls-box {
-    spacing: 8px;
+/* Zone section */
+.roon-zone-section {
+    spacing: 4px;
+    padding: 4px 16px;
+}
+
+.roon-zone-selector-box {
+    spacing: 10px;
     padding: 4px 0;
 }
 
-.roon-control-button {
-    padding: 4px;
-    border-radius: 50%;
+.roon-zone-selector-icon {
+    color: rgba(255, 255, 255, 0.5);
 }
 
-.roon-control-button:hover {
+.roon-zone-combo {
+    padding: 6px 12px;
+    border-radius: 4px;
+    background-color: rgba(255, 255, 255, 0.06);
+    font-size: 14px;
+    font-weight: 400;
+}
+
+.roon-zone-combo:hover {
     background-color: rgba(255, 255, 255, 0.1);
 }
 
-.roon-control-button:active {
-    background-color: rgba(255, 255, 255, 0.2);
+/* Zone picker dropdown */
+.roon-zone-picker {
+    spacing: 2px;
+    padding: 4px 0;
 }
 
-/* Zones section */
+.roon-zone-picker-item {
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.roon-zone-picker-item:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* Volume zones */
 .roon-zones-container {
-    spacing: 8px;
+    spacing: 4px;
     padding: 4px 0;
 }
 
 .roon-zone-box {
-    spacing: 8px;
-    padding: 4px 8px;
+    spacing: 10px;
+    padding: 4px 0;
 }
 
 .roon-zone-state-icon {
-    color: rgba(255, 255, 255, 0.6);
+    color: rgba(255, 255, 255, 0.35);
 }
 
 .roon-zone-label {
-    font-size: 11px;
+    font-size: 14px;
+    font-weight: 400;
     min-width: 80px;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+/* Controls row — transport + search toggle */
+.roon-controls-row {
+    padding: 4px 16px;
+}
+
+.roon-controls-box {
+    spacing: 12px;
+}
+
+.roon-control-button {
+    padding: 6px;
+    border-radius: 50%;
+}
+
+.roon-control-button:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.roon-control-button:active {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.roon-search-toggle-btn {
+    padding: 6px;
+    border-radius: 50%;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.roon-search-toggle-btn:hover {
+    background-color: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.9);
+}
+
+/* Search — toggled open from controls row */
+.roon-search-section {
+    spacing: 10px;
+    padding: 8px 16px;
+}
+
+.roon-search-entry {
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 14px;
+}
+
+/* Search results — quiet list */
+.roon-search-results-scroll {
+    max-height: 500px;
+}
+
+.roon-search-result-btn {
+    padding: 0;
+    border-radius: 4px;
+}
+
+.roon-search-result-btn:hover {
+    background-color: rgba(255, 255, 255, 0.06);
+}
+
+.roon-search-result-row {
+    spacing: 10px;
+    padding: 8px 16px 8px 10px;
+}
+
+.roon-search-result-title {
+    font-size: 14px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.9);
+}
+
+.roon-search-result-subtitle {
+    font-size: 13px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.45);
+}
+
+.roon-search-message {
+    font-size: 14px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.4);
+    padding: 16px;
 }

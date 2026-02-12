@@ -11,5 +11,15 @@
       <summary>Show controls in panel</summary>
       <description>Whether to show play/pause and next buttons in the panel</description>
     </key>
+    <key name="hidden-output-ids" type="as">
+      <default>[]</default>
+      <summary>Hidden output IDs</summary>
+      <description>List of Roon output IDs to hide from the volume slider list</description>
+    </key>
+    <key name="toggle-play-pause" type="as">
+      <default>['&lt;Super&gt;p']</default>
+      <summary>Toggle play/pause</summary>
+      <description>Keyboard shortcut to toggle Roon play/pause</description>
+    </key>
   </schema>
 </schemalist>

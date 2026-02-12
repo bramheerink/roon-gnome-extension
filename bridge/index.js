@@ -2,6 +2,7 @@ import RoonApi from 'node-roon-api';
 import RoonApiTransport from 'node-roon-api-transport';
 import RoonApiImage from 'node-roon-api-image';
 import RoonApiStatus from 'node-roon-api-status';
+import RoonApiBrowse from 'node-roon-api-browse';
 import dbus from 'dbus-next';
 import express from 'express';
 
@@ -49,6 +50,7 @@ class RoonMprisBridge {
         this.core = null;
         this.transport = null;
         this.image = null;
+        this.browse = null;
         this.zones = new Map();
         this.activeZoneId = null;
         this.imageServer = null;
@@ -83,7 +85,7 @@ class RoonMprisBridge {
         });
 
         this.roon.init_services({
-            required_services: [RoonApiTransport, RoonApiImage],
+            required_services: [RoonApiTransport, RoonApiImage, RoonApiBrowse],
             provided_services: [
                 new RoonApiStatus(this.roon)
             ]
@@ -99,8 +101,9 @@ class RoonMprisBridge {
         // Request the MPRIS bus name
         await this.bus.requestName('org.mpris.MediaPlayer2.roon', 0);
 
-        // Create custom Roon Zones interface
+        // Create custom Roon interfaces
         await this.initRoonZonesInterface();
+        await this.initRoonBrowseInterface();
 
         // Create MediaPlayer2 interface
         const mediaPlayer2Iface = {
@@ -264,6 +267,136 @@ class RoonMprisBridge {
         console.log('Roon Zones interface registered on D-Bus');
     }
 
+    async initRoonBrowseInterface() {
+        const bridge = this;
+
+        const roonBrowseIface = {
+            name: 'org.roon.Browse',
+            methods: {
+                Search:     { inSignature: 'ss', outSignature: 's' },
+                BrowseItem: { inSignature: 'ss', outSignature: 's' },
+                GetZones:   { outSignature: 's' },
+            },
+        };
+
+        class RoonBrowse extends Interface {
+            Search(query, zoneOrOutputId) {
+                return new Promise((resolve) => {
+                    if (!bridge.browse) {
+                        resolve(JSON.stringify({ error: 'Not connected' }));
+                        return;
+                    }
+
+                    const zoneId = zoneOrOutputId || bridge.activeZoneId;
+
+                    bridge.browse.browse({
+                        hierarchy: 'search',
+                        input: query,
+                        zone_or_output_id: zoneId,
+                        pop_all: true,
+                    }, (err, body) => {
+                        if (err) {
+                            resolve(JSON.stringify({ error: String(err) }));
+                            return;
+                        }
+
+                        if (body.action === 'list') {
+                            bridge.browse.load({
+                                hierarchy: 'search',
+                                count: 100,
+                            }, (loadErr, loadBody) => {
+                                if (loadErr) {
+                                    resolve(JSON.stringify({ error: String(loadErr) }));
+                                    return;
+                                }
+                                resolve(JSON.stringify({
+                                    items: (loadBody.items || []).map(item => ({
+                                        title:     item.title,
+                                        subtitle:  item.subtitle || '',
+                                        image_key: item.image_key || '',
+                                        item_key:  item.item_key || '',
+                                        hint:      item.hint || '',
+                                    })),
+                                }));
+                            });
+                        } else {
+                            resolve(JSON.stringify({
+                                action: body.action,
+                                message: body.message || '',
+                                items: [],
+                            }));
+                        }
+                    });
+                });
+            }
+
+            BrowseItem(itemKey, zoneOrOutputId) {
+                return new Promise((resolve) => {
+                    if (!bridge.browse) {
+                        resolve(JSON.stringify({ error: 'Not connected' }));
+                        return;
+                    }
+
+                    const zoneId = zoneOrOutputId || bridge.activeZoneId;
+
+                    bridge.browse.browse({
+                        hierarchy: 'search',
+                        item_key: itemKey,
+                        zone_or_output_id: zoneId,
+                    }, (err, body) => {
+                        if (err) {
+                            resolve(JSON.stringify({ error: String(err) }));
+                            return;
+                        }
+
+                        if (body.action === 'list') {
+                            bridge.browse.load({
+                                hierarchy: 'search',
+                                count: 100,
+                            }, (loadErr, loadBody) => {
+                                if (loadErr) {
+                                    resolve(JSON.stringify({ error: String(loadErr) }));
+                                    return;
+                                }
+                                resolve(JSON.stringify({
+                                    items: (loadBody.items || []).map(item => ({
+                                        title:     item.title,
+                                        subtitle:  item.subtitle || '',
+                                        image_key: item.image_key || '',
+                                        item_key:  item.item_key || '',
+                                        hint:      item.hint || '',
+                                    })),
+                                }));
+                            });
+                        } else if (body.action === 'message') {
+                            resolve(JSON.stringify({ action: 'message', message: body.message || 'Done' }));
+                        } else {
+                            resolve(JSON.stringify({ action: body.action || 'none', message: body.message || '' }));
+                        }
+                    });
+                });
+            }
+
+            GetZones() {
+                const zones = [];
+                for (const [zoneId, zone] of bridge.zones) {
+                    zones.push({
+                        zone_id: zoneId,
+                        display_name: zone.display_name,
+                        state: zone.state || 'stopped',
+                    });
+                }
+                return JSON.stringify(zones);
+            }
+        }
+
+        RoonBrowse.configureMembers(roonBrowseIface);
+        this.roonBrowse = new RoonBrowse('org.roon.Browse');
+        this.bus.export('/org/roon/Browse', this.roonBrowse);
+
+        console.log('Roon Browse interface registered on D-Bus');
+    }
+
     emitPropertiesChanged(changedProps) {
         if (this.player) {
             Interface.emitPropertiesChanged(this.player, changedProps, []);
@@ -320,6 +453,7 @@ class RoonMprisBridge {
         this.core = core;
         this.transport = core.services.RoonApiTransport;
         this.image = core.services.RoonApiImage;
+        this.browse = core.services.RoonApiBrowse;
 
         // Subscribe to zone updates
         this.transport.subscribe_zones((cmd, data) => {
@@ -332,6 +466,7 @@ class RoonMprisBridge {
         this.core = null;
         this.transport = null;
         this.image = null;
+        this.browse = null;
         this.zones.clear();
         this.activeZoneId = null;
 

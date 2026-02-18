@@ -61,6 +61,9 @@ class RoonMprisBridge {
         this._metadata = {};
         this._volume = 0.5;
         this._position = BigInt(0);
+
+        // Waveform data per zone
+        this._waveforms = new Map();
     }
 
     async start() {
@@ -216,7 +219,8 @@ class RoonMprisBridge {
             methods: {
                 // Returns (output_id, output_name, zone_display_name, volume, state)
                 GetOutputs: { outSignature: 'a(sssds)' },
-                SetOutputVolume: { inSignature: 'sd' }
+                SetOutputVolume: { inSignature: 'sd' },
+                GetWaveform: { outSignature: 's' }
             },
             properties: {
                 ActiveZoneId: { signature: 's', access: ACCESS_READ }
@@ -255,6 +259,10 @@ class RoonMprisBridge {
                 }
             }
 
+            GetWaveform() {
+                return JSON.stringify(bridge._waveforms.get(bridge.activeZoneId) || []);
+            }
+
             get ActiveZoneId() {
                 return bridge.activeZoneId || '';
             }
@@ -273,9 +281,10 @@ class RoonMprisBridge {
         const roonBrowseIface = {
             name: 'org.roon.Browse',
             methods: {
-                Search:     { inSignature: 'ss', outSignature: 's' },
-                BrowseItem: { inSignature: 'ss', outSignature: 's' },
-                GetZones:   { outSignature: 's' },
+                Search:              { inSignature: 'ss', outSignature: 's' },
+                BrowseItem:          { inSignature: 'ss', outSignature: 's' },
+                GetZones:            { outSignature: 's' },
+                GetArtistBiography:  { inSignature: 's', outSignature: 's' },
             },
         };
 
@@ -373,6 +382,138 @@ class RoonMprisBridge {
                         } else {
                             resolve(JSON.stringify({ action: body.action || 'none', message: body.message || '' }));
                         }
+                    });
+                });
+            }
+
+            GetArtistBiography(artistName) {
+                return new Promise((resolve) => {
+                    if (!bridge.browse) {
+                        resolve(JSON.stringify({ error: 'Not connected' }));
+                        return;
+                    }
+
+                    const zoneId = bridge.activeZoneId;
+
+                    // Step 1: Search for the artist
+                    bridge.browse.browse({
+                        hierarchy: 'browse',
+                        input: artistName,
+                        zone_or_output_id: zoneId,
+                        pop_all: true,
+                        multi_session_key: 'bio',
+                    }, (err, body) => {
+                        if (err) { resolve(JSON.stringify({ error: String(err) })); return; }
+                        if (body.action !== 'list') {
+                            resolve(JSON.stringify({ error: 'Unexpected response', action: body.action }));
+                            return;
+                        }
+
+                        // Load search results
+                        bridge.browse.load({
+                            hierarchy: 'browse',
+                            count: 20,
+                            multi_session_key: 'bio',
+                        }, (loadErr, loadBody) => {
+                            if (loadErr) { resolve(JSON.stringify({ error: String(loadErr) })); return; }
+
+                            const items = loadBody.items || [];
+
+                            // Find "Artists" category or artist matching the name
+                            const artistCat = items.find(i =>
+                                i.title === 'Artists' || i.hint === 'list'
+                            );
+                            const directArtist = items.find(i =>
+                                i.title?.toLowerCase() === artistName.toLowerCase() && i.hint === 'action_list'
+                            );
+                            const target = directArtist || artistCat;
+
+                            if (!target || !target.item_key) {
+                                resolve(JSON.stringify({
+                                    error: 'Artist not found',
+                                    items: items.map(i => ({ title: i.title, hint: i.hint })),
+                                }));
+                                return;
+                            }
+
+                            // Step 2: Browse into artist (or Artists category)
+                            const browseIntoArtist = (itemKey) => {
+                                bridge.browse.browse({
+                                    hierarchy: 'browse',
+                                    item_key: itemKey,
+                                    zone_or_output_id: zoneId,
+                                    multi_session_key: 'bio',
+                                }, (err2, body2) => {
+                                    if (err2) { resolve(JSON.stringify({ error: String(err2) })); return; }
+                                    if (body2.action !== 'list') {
+                                        resolve(JSON.stringify({ error: 'Cannot browse artist' }));
+                                        return;
+                                    }
+
+                                    bridge.browse.load({
+                                        hierarchy: 'browse',
+                                        count: 50,
+                                        multi_session_key: 'bio',
+                                    }, (loadErr2, loadBody2) => {
+                                        if (loadErr2) { resolve(JSON.stringify({ error: String(loadErr2) })); return; }
+
+                                        const artistItems = loadBody2.items || [];
+
+                                        // If this is the Artists category, find the specific artist
+                                        const specificArtist = artistItems.find(i =>
+                                            i.title?.toLowerCase() === artistName.toLowerCase()
+                                        );
+                                        if (specificArtist && specificArtist.item_key) {
+                                            browseIntoArtist(specificArtist.item_key);
+                                            return;
+                                        }
+
+                                        // We're on the artist page — find biography/about
+                                        const bioItem = artistItems.find(i =>
+                                            /biography|about|bio/i.test(i.title || '')
+                                        );
+
+                                        if (bioItem && bioItem.item_key) {
+                                            // Step 3: Browse into biography
+                                            bridge.browse.browse({
+                                                hierarchy: 'browse',
+                                                item_key: bioItem.item_key,
+                                                zone_or_output_id: zoneId,
+                                                multi_session_key: 'bio',
+                                            }, (err3, body3) => {
+                                                if (err3) { resolve(JSON.stringify({ error: String(err3) })); return; }
+
+                                                bridge.browse.load({
+                                                    hierarchy: 'browse',
+                                                    count: 10,
+                                                    multi_session_key: 'bio',
+                                                }, (loadErr3, loadBody3) => {
+                                                    if (loadErr3) { resolve(JSON.stringify({ error: String(loadErr3) })); return; }
+
+                                                    const bioItems = loadBody3.items || [];
+                                                    // Biography text is usually in the subtitle or title of items
+                                                    const text = bioItems.map(i => i.title || i.subtitle || '').filter(Boolean).join('\n\n');
+
+                                                    resolve(JSON.stringify({
+                                                        text: text || 'No biography text found',
+                                                        source: 'Roon',
+                                                        items: bioItems.map(i => ({ title: i.title?.substring(0, 80), subtitle: i.subtitle?.substring(0, 80) })),
+                                                    }));
+                                                });
+                                            });
+                                        } else {
+                                            // No bio item found — return the page sections for debugging
+                                            resolve(JSON.stringify({
+                                                error: 'No biography section found on artist page',
+                                                sections: artistItems.map(i => ({ title: i.title, hint: i.hint })),
+                                            }));
+                                        }
+                                    });
+                                });
+                            };
+
+                            browseIntoArtist(target.item_key);
+                        });
                     });
                 });
             }
@@ -490,6 +631,12 @@ class RoonMprisBridge {
     }
 
     handleZoneUpdate(cmd, data) {
+        if (cmd === 'WaveformChanged') {
+            if (data.zone_id && data.waveform) {
+                this._waveforms.set(data.zone_id, data.waveform);
+            }
+            return;
+        }
         if (cmd === 'Subscribed' || cmd === 'Changed') {
             if (data.zones) {
                 data.zones.forEach(zone => this.zones.set(zone.zone_id, zone));

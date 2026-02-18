@@ -17,7 +17,7 @@
       <description>List of Roon output IDs to hide from the volume slider list</description>
     </key>
     <key name="toggle-play-pause" type="as">
-      <default>['&lt;Super&gt;p']</default>
+      <default>['&lt;Super&gt;r']</default>
       <summary>Toggle play/pause</summary>
       <description>Keyboard shortcut to toggle Roon play/pause</description>
     </key>

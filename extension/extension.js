@@ -4,6 +4,7 @@ import Gio from 'gi://Gio';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
 import GdkPixbuf from 'gi://GdkPixbuf';
+import Pango from 'gi://Pango';
 import Soup from 'gi://Soup?version=3.0';
 import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
@@ -23,6 +24,9 @@ const ROON_ZONES_IFACE = `
     <method name="SetOutputVolume">
       <arg type="s" direction="in" name="output_id"/>
       <arg type="d" direction="in" name="volume"/>
+    </method>
+    <method name="GetWaveform">
+      <arg type="s" direction="out" name="waveform_json"/>
     </method>
     <property name="ActiveZoneId" type="s" access="read"/>
   </interface>
@@ -45,6 +49,10 @@ const ROON_BROWSE_IFACE = `
     </method>
     <method name="GetZones">
       <arg type="s" direction="out" name="zones_json"/>
+    </method>
+    <method name="GetArtistBiography">
+      <arg type="s" direction="in" name="artist_name"/>
+      <arg type="s" direction="out" name="biography_json"/>
     </method>
   </interface>
 </node>`;
@@ -91,6 +99,13 @@ class RoonIndicator extends PanelMenu.Button {
         this._currentArtUrl = null;
         this._metadata = null;
         this._playbackStatus = 'Stopped';
+        this._lastControlTime = 0;
+        this._trackLength = 0;
+        this._progressFraction = 0;
+        this._progressTimerId = null;
+        this._waveformData = null;
+        this._vuBars = new Float64Array(8);
+        this._vuTimerId = null;
         this._selectedZoneId = null;
 
         // Create panel box
@@ -199,8 +214,13 @@ class RoonIndicator extends PanelMenu.Button {
         this.menu.connect('open-state-changed', (menu, open) => {
             if (open) {
                 this._refreshZones();
+                if (this._playbackStatus === 'Playing' && this._waveformData) {
+                    this._startVUTimer();
+                }
             } else {
+                this._stopVUTimer();
                 if (this._searchSection?.visible) this._hideSearch();
+                if (this._bioSection?.visible) this._hideBiography();
                 this._zonePickerBox?.hide();
             }
         });
@@ -218,8 +238,15 @@ class RoonIndicator extends PanelMenu.Button {
             style_class: 'roon-top-box'
         });
 
+        this._artContainer = new St.Widget({
+            layout_manager: new Clutter.BinLayout(),
+            width: 120,
+            height: 120,
+        });
         this._albumArtBin = new St.Bin({
-            style_class: 'roon-album-art-bin'
+            style_class: 'roon-album-art-bin',
+            width: 120,
+            height: 120,
         });
         this._albumArt = new St.Icon({
             icon_name: 'audio-x-generic-symbolic',
@@ -227,7 +254,17 @@ class RoonIndicator extends PanelMenu.Button {
             icon_size: 120
         });
         this._albumArtBin.set_child(this._albumArt);
-        this._topBox.add_child(this._albumArtBin);
+        this._artContainer.add_child(this._albumArtBin);
+
+        this._progressDraw = new St.DrawingArea({
+            width: 120,
+            height: 120,
+            reactive: false,
+        });
+        this._progressDraw.connect('repaint', (area) => this._drawProgress(area));
+        this._artContainer.add_child(this._progressDraw);
+
+        this._topBox.add_child(this._artContainer);
 
         this._rightBox = new St.BoxLayout({
             vertical: true,
@@ -246,7 +283,15 @@ class RoonIndicator extends PanelMenu.Button {
             text: '',
             style_class: 'roon-artist-label'
         });
-        this._rightBox.add_child(this._artistLabel);
+        this._artistButton = new St.Button({
+            child: this._artistLabel,
+            style_class: 'roon-artist-button',
+            reactive: true,
+            track_hover: true,
+            x_align: Clutter.ActorAlign.START,
+        });
+        this._artistButton.connect('clicked', () => this._toggleBiography());
+        this._rightBox.add_child(this._artistButton);
 
         this._topBox.add_child(this._rightBox);
 
@@ -257,18 +302,36 @@ class RoonIndicator extends PanelMenu.Button {
         });
         this.menu.addMenuItem(topItem);
 
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        // === VU Meter ===
+        this._buildVUSection();
+
+        const sep1 = new PopupMenu.PopupSeparatorMenuItem();
+        this.menu.addMenuItem(sep1);
 
         // === 2. Zone selector + volume sliders ===
         this._buildZoneSection();
 
-        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+        const sep2 = new PopupMenu.PopupSeparatorMenuItem();
+        this.menu.addMenuItem(sep2);
 
         // === 3. Controls row: prev/play/next + search icon ===
         this._buildControlsRow();
 
         // === 4. Search section (hidden by default) ===
         this._buildSearchSection();
+
+        // Track all normal menu items for biography overlay toggle
+        this._normalMenuItems = [topItem, sep1, sep2];
+        // VU, zone, controls, search items are added inside their build methods
+        // — we collect them via the menu's item list minus the bio item
+        for (const item of this.menu._getMenuItems()) {
+            if (!this._normalMenuItems.includes(item)) {
+                this._normalMenuItems.push(item);
+            }
+        }
+
+        // === 5. Biography section (hidden overlay) ===
+        this._buildBiographySection();
     }
 
     _buildZoneSection() {
@@ -364,6 +427,19 @@ class RoonIndicator extends PanelMenu.Button {
         this.menu.addMenuItem(controlsItem);
     }
 
+    _buildVUSection() {
+        const vuItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+        this._vuDraw = new St.DrawingArea({
+            style_class: 'roon-vu-section',
+            x_expand: true,
+            height: 32,
+            reactive: false,
+        });
+        this._vuDraw.connect('repaint', (area) => this._drawVUMeters(area));
+        vuItem.add_child(this._vuDraw);
+        this.menu.addMenuItem(vuItem);
+    }
+
     _buildSearchSection() {
         const searchItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         this._searchSection = new St.BoxLayout({
@@ -403,6 +479,444 @@ class RoonIndicator extends PanelMenu.Button {
         this._searchSection.hide();
         searchItem.add_child(this._searchSection);
         this.menu.addMenuItem(searchItem);
+    }
+
+    _buildBiographySection() {
+        this._bioItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+        this._bioSection = new St.BoxLayout({
+            vertical: true,
+            style_class: 'roon-bio-section',
+            x_expand: true,
+        });
+
+        // Navigation stack for linked biographies
+        this._bioHistory = [];
+        this._bioLinks = [];
+
+        // Header: back arrow + artist name
+        const bioHeader = new St.BoxLayout({
+            style_class: 'roon-bio-header',
+            x_expand: true,
+        });
+
+        const bioBackButton = new St.Button({
+            style_class: 'roon-bio-back-btn',
+            child: new St.Icon({
+                icon_name: 'go-previous-symbolic',
+                icon_size: 16,
+            }),
+        });
+        bioBackButton.connect('clicked', () => this._bioGoBack());
+        bioHeader.add_child(bioBackButton);
+
+        this._bioHeaderLabel = new St.Label({
+            text: 'Biography',
+            style_class: 'roon-bio-header-label',
+            x_expand: true,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        bioHeader.add_child(this._bioHeaderLabel);
+
+        this._bioSection.add_child(bioHeader);
+
+        // Scrollable biography content
+        this._bioScroll = new St.ScrollView({
+            style_class: 'roon-bio-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            overlay_scrollbars: true,
+        });
+
+        this._bioContentBox = new St.BoxLayout({
+            vertical: true,
+            x_expand: true,
+            style_class: 'roon-bio-content',
+        });
+        this._bioScroll.set_child(this._bioContentBox);
+        this._bioSection.add_child(this._bioScroll);
+
+        // Source attribution
+        this._bioSourceLabel = new St.Label({
+            text: '',
+            style_class: 'roon-bio-source',
+        });
+        this._bioSection.add_child(this._bioSourceLabel);
+
+        this._bioSection.hide();
+        this._bioItem.add_child(this._bioSection);
+        this._bioItem.visible = false;
+        this.menu.addMenuItem(this._bioItem);
+    }
+
+    _toggleBiography() {
+        if (this._bioSection.visible) {
+            this._bioGoBack();
+        } else {
+            this._showBiography();
+        }
+    }
+
+    _showBiography() {
+        const artist = this._metadata?.artist;
+        if (!artist || artist === 'Unknown Artist') return;
+
+        // Hide all normal menu items, show biography
+        for (const item of this._normalMenuItems) {
+            item.visible = false;
+        }
+        this._bioItem.visible = true;
+        this._bioSection.show();
+        this.menu.box.add_style_class_name('roon-popup-menu-wide');
+
+        this._bioHistory = [];
+        this._navigateToBio(artist);
+    }
+
+    _navigateToBio(artistName) {
+        this._bioHeaderLabel.text = artistName;
+        this._setBioLoading();
+        this._bioSourceLabel.text = '';
+
+        // Scroll to top
+        const vAdj = this._bioScroll.vscroll?.adjustment;
+        if (vAdj) vAdj.value = 0;
+
+        this._fetchBiography(artistName);
+    }
+
+    _bioGoBack() {
+        if (this._bioHistory.length > 0) {
+            const prev = this._bioHistory.pop();
+            this._bioHeaderLabel.text = prev.artist;
+            this._bioSourceLabel.text = prev.source;
+            this._setBioContent(prev.text, prev.imageUrls);
+            const vAdj = this._bioScroll.vscroll?.adjustment;
+            if (vAdj) vAdj.value = 0;
+        } else {
+            this._hideBiography();
+        }
+    }
+
+    _hideBiography() {
+        this._bioSection.hide();
+        this._bioItem.visible = false;
+        this._bioHistory = [];
+        this.menu.box.remove_style_class_name('roon-popup-menu-wide');
+
+        // Restore normal menu items
+        for (const item of this._normalMenuItems) {
+            item.visible = true;
+        }
+    }
+
+    _setBioLoading() {
+        this._bioContentBox.destroy_all_children();
+        const loadLabel = new St.Label({
+            text: 'Loading biography\u2026',
+            style_class: 'roon-bio-text',
+            x_expand: true,
+        });
+        this._bioContentBox.add_child(loadLabel);
+    }
+
+    _setBioContent(rawText, imageUrls) {
+        this._bioContentBox.destroy_all_children();
+        this._bioLinks = [];
+
+        // Parse markdown into paragraphs and render as widgets
+        const lines = rawText.split('\n');
+        let paragraph = '';
+
+        const flushParagraph = () => {
+            if (!paragraph.trim()) return;
+            this._addBioParagraph(paragraph.trim());
+            paragraph = '';
+        };
+
+        for (const line of lines) {
+            // Strip image markdown (we load images separately)
+            const stripped = line.replace(/!\[[^\]]*\]\([^)]+\)/g, '').trim();
+
+            if (stripped === '') {
+                flushParagraph();
+                continue;
+            }
+
+            // H2 header
+            if (stripped.startsWith('## ') && !stripped.startsWith('### ')) {
+                flushParagraph();
+                const headerText = stripped.slice(3);
+                const label = new St.Label({
+                    text: headerText,
+                    style_class: 'roon-bio-h2',
+                    x_expand: true,
+                });
+                this._bioContentBox.add_child(label);
+                continue;
+            }
+
+            // H3 header
+            if (stripped.startsWith('### ')) {
+                flushParagraph();
+                const headerText = stripped.slice(4);
+                const label = new St.Label({
+                    text: headerText,
+                    style_class: 'roon-bio-h3',
+                    x_expand: true,
+                });
+                this._bioContentBox.add_child(label);
+                continue;
+            }
+
+            // Regular text — accumulate paragraph
+            if (paragraph) paragraph += ' ';
+            paragraph += stripped;
+        }
+        flushParagraph();
+
+        // Load images
+        if (imageUrls && imageUrls.length > 0) {
+            for (const img of imageUrls.slice(0, 3)) {
+                this._loadBioImage(img.url, img.alt);
+            }
+        }
+    }
+
+    _addBioParagraph(text) {
+        // Parse [Name](id) and [[id|Name]] links into Pango markup
+        const linkRe = /\[([^\]]+)\]\((\d+)\)|\[\[(\d+)\|([^\]]+)\]\]/g;
+        const links = [];
+        let markup = '';
+        let plainLen = 0; // byte length of rendered text
+        let lastIdx = 0;
+        let match;
+
+        while ((match = linkRe.exec(text)) !== null) {
+            // Text before the link
+            const before = text.slice(lastIdx, match.index);
+            markup += this._escapeMarkup(before);
+            plainLen += new TextEncoder().encode(before).length;
+
+            // The link
+            const name = match[1] || match[4];
+            const id = match[2] || match[3];
+            const byteStart = plainLen;
+            plainLen += new TextEncoder().encode(name).length;
+
+            markup += `<span foreground="#5b9bd5">${this._escapeMarkup(name)}</span>`;
+            links.push({ byteStart, byteEnd: plainLen, name, id });
+
+            lastIdx = match.index + match[0].length;
+        }
+
+        // Remaining text
+        const rest = text.slice(lastIdx);
+        markup += this._escapeMarkup(rest);
+
+        const label = new St.Label({
+            style_class: 'roon-bio-text',
+            x_expand: true,
+        });
+        label.clutter_text.set_line_wrap(true);
+        label.clutter_text.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
+        label.clutter_text.set_use_markup(true);
+        label.clutter_text.set_markup(markup);
+
+        // If this paragraph has links, make it clickable
+        if (links.length > 0) {
+            const paraLinks = links;
+            this._bioLinks.push(...paraLinks);
+
+            label.clutter_text.reactive = true;
+            label.clutter_text.connect('button-press-event', (actor, event) => {
+                const [stageX, stageY] = event.get_coords();
+                const [ok, localX, localY] = actor.transform_stage_point(stageX, stageY);
+                if (!ok) return Clutter.EVENT_PROPAGATE;
+
+                const layout = actor.get_layout();
+                const [, byteIdx] = layout.xy_to_index(
+                    localX * Pango.SCALE,
+                    localY * Pango.SCALE,
+                );
+
+                for (const link of paraLinks) {
+                    if (byteIdx >= link.byteStart && byteIdx < link.byteEnd) {
+                        this._onBioLinkClicked(link);
+                        return Clutter.EVENT_STOP;
+                    }
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
+        }
+
+        this._bioContentBox.add_child(label);
+    }
+
+    _onBioLinkClicked(link) {
+        // Save current biography to history before navigating
+        // Store raw text + source for back navigation
+        if (this._currentBioRaw) {
+            this._bioHistory.push({
+                artist: this._bioHeaderLabel.text,
+                text: this._currentBioRaw,
+                source: this._bioSourceLabel.text,
+                imageUrls: this._currentBioImages,
+            });
+        }
+
+        this._navigateToBio(link.name);
+    }
+
+    _loadBioImage(url, altText) {
+        const message = Soup.Message.new('GET', url);
+        if (!message) return;
+
+        this._httpSession.send_and_read_async(
+            message,
+            GLib.PRIORITY_DEFAULT,
+            null,
+            (session, result) => {
+                try {
+                    const bytes = session.send_and_read_finish(result);
+                    const data = bytes.get_data();
+                    if (!data || data.length === 0) return;
+
+                    const stream = Gio.MemoryInputStream.new_from_bytes(bytes);
+                    const pixbuf = GdkPixbuf.Pixbuf.new_from_stream(stream, null);
+                    stream.close(null);
+
+                    // Scale to max 280px wide
+                    const maxW = 280;
+                    let w = pixbuf.get_width();
+                    let h = pixbuf.get_height();
+                    if (w > maxW) {
+                        h = Math.round(h * maxW / w);
+                        w = maxW;
+                    }
+                    const scaled = pixbuf.scale_simple(w, h, GdkPixbuf.InterpType.BILINEAR);
+
+                    const clutterImage = new Clutter.Image();
+                    clutterImage.set_data(
+                        scaled.get_pixels(),
+                        scaled.get_has_alpha()
+                            ? Clutter.PixelFormat.RGBA_8888
+                            : Clutter.PixelFormat.RGB_888,
+                        w, h,
+                        scaled.get_rowstride(),
+                    );
+
+                    const imageActor = new Clutter.Actor({
+                        content: clutterImage,
+                        width: w,
+                        height: h,
+                        x_align: Clutter.ActorAlign.CENTER,
+                    });
+
+                    // Wrap in a box with caption
+                    const imageBox = new St.BoxLayout({
+                        vertical: true,
+                        style_class: 'roon-bio-image-box',
+                        x_align: Clutter.ActorAlign.CENTER,
+                    });
+                    imageBox.add_child(imageActor);
+
+                    if (altText) {
+                        const caption = new St.Label({
+                            text: altText.replace(/\\(.)/g, '$1'),
+                            style_class: 'roon-bio-caption',
+                            x_align: Clutter.ActorAlign.CENTER,
+                        });
+                        caption.clutter_text.set_line_wrap(true);
+                        caption.clutter_text.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR);
+                        imageBox.add_child(caption);
+                    }
+
+                    this._bioContentBox.add_child(imageBox);
+                } catch (e) {
+                    // Image load failed — skip silently
+                }
+            }
+        );
+    }
+
+    _escapeMarkup(text) {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    _fetchBiography(artistName) {
+        const encoded = encodeURIComponent(artistName);
+        const url = `http://127.0.0.1:18795/biography?artist=${encoded}`;
+        const message = Soup.Message.new('GET', url);
+
+        if (!message) {
+            this._setBioLoading();
+            return;
+        }
+
+        this._httpSession.send_and_read_async(
+            message,
+            GLib.PRIORITY_DEFAULT,
+            null,
+            (session, result) => {
+                try {
+                    const bytes = session.send_and_read_finish(result);
+                    const data = bytes.get_data();
+
+                    if (!data || data.length === 0) {
+                        this._bioContentBox.destroy_all_children();
+                        const errLabel = new St.Label({
+                            text: 'No response from biography service.',
+                            style_class: 'roon-bio-text',
+                        });
+                        this._bioContentBox.add_child(errLabel);
+                        this._bioSourceLabel.text = '';
+                        return;
+                    }
+
+                    const decoder = new TextDecoder('utf-8');
+                    const json = JSON.parse(decoder.decode(data));
+
+                    if (json.error) {
+                        this._bioContentBox.destroy_all_children();
+                        const errLabel = new St.Label({
+                            text: json.error,
+                            style_class: 'roon-bio-text',
+                        });
+                        this._bioContentBox.add_child(errLabel);
+                        this._bioSourceLabel.text = '';
+                    } else {
+                        const rawText = json.text || 'No biography available.';
+
+                        // Extract image URLs before rendering
+                        const imageUrls = [];
+                        const imgRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
+                        let imgMatch;
+                        while ((imgMatch = imgRe.exec(rawText)) !== null) {
+                            imageUrls.push({ alt: imgMatch[1], url: imgMatch[2] });
+                        }
+
+                        this._currentBioRaw = rawText;
+                        this._currentBioImages = imageUrls;
+                        this._setBioContent(rawText, imageUrls);
+                        this._bioSourceLabel.text = json.source
+                            ? `Source: ${json.source}`
+                            : '';
+                    }
+                } catch (e) {
+                    this._bioContentBox.destroy_all_children();
+                    const errLabel = new St.Label({
+                        text: 'Failed to load biography.',
+                        style_class: 'roon-bio-text',
+                    });
+                    this._bioContentBox.add_child(errLabel);
+                    this._bioSourceLabel.text = '';
+                }
+            }
+        );
     }
 
     _toggleSearch() {
@@ -739,6 +1253,14 @@ class RoonIndicator extends PanelMenu.Button {
         if ('PlaybackStatus' in props) {
             this._playbackStatus = props.PlaybackStatus.unpack();
             this._updatePlayPauseIcon();
+            if (this._playbackStatus === 'Playing') {
+                this._startProgressTimer();
+                if (this.menu.isOpen && this._waveformData) this._startVUTimer();
+            } else {
+                this._stopProgressTimer();
+                this._stopVUTimer();
+                this._updateProgress();
+            }
         }
     }
 
@@ -753,6 +1275,14 @@ class RoonIndicator extends PanelMenu.Button {
             if (this._proxy.PlaybackStatus) {
                 this._playbackStatus = this._proxy.PlaybackStatus;
                 this._updatePlayPauseIcon();
+                if (this._playbackStatus === 'Playing') {
+                    this._startProgressTimer();
+                    if (this.menu.isOpen && this._waveformData) this._startVUTimer();
+                } else {
+                    this._stopProgressTimer();
+                    this._stopVUTimer();
+                    this._updateProgress();
+                }
             }
         } catch (e) {
             console.error('Error updating from proxy:', e);
@@ -765,6 +1295,8 @@ class RoonIndicator extends PanelMenu.Button {
         const artist = Array.isArray(artistArr) ? artistArr[0] || 'Unknown Artist' : artistArr;
         const album = metadata['xesam:album']?.unpack?.() || metadata['xesam:album'] || '';
         const artUrl = metadata['mpris:artUrl']?.unpack?.() || metadata['mpris:artUrl'] || '';
+        const length = metadata['mpris:length']?.unpack?.() || metadata['mpris:length'] || 0;
+        this._trackLength = Number(length);
 
         this._metadata = { title, artist, album, artUrl };
 
@@ -781,6 +1313,7 @@ class RoonIndicator extends PanelMenu.Button {
         if (artUrl && artUrl !== this._currentArtUrl) {
             this._currentArtUrl = artUrl;
             this._loadAlbumArt(artUrl);
+            this._fetchWaveform();
         }
     }
 
@@ -867,25 +1400,229 @@ class RoonIndicator extends PanelMenu.Button {
         }
     }
 
+    _isControlThrottled() {
+        const now = GLib.get_monotonic_time();
+        if (now - this._lastControlTime < 500000) return true; // 500ms
+        this._lastControlTime = now;
+        return false;
+    }
+
     _onPlayPause() {
-        if (this._proxy) {
+        if (this._proxy && !this._isControlThrottled()) {
             this._proxy.PlayPauseRemote();
         }
     }
 
     _onNext() {
-        if (this._proxy) {
+        if (this._proxy && !this._isControlThrottled()) {
             this._proxy.NextRemote();
         }
     }
 
     _onPrevious() {
-        if (this._proxy) {
+        if (this._proxy && !this._isControlThrottled()) {
             this._proxy.PreviousRemote();
         }
     }
 
+    _startProgressTimer() {
+        if (this._progressTimerId) return;
+        this._updateProgress();
+        this._progressTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+            this._updateProgress();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopProgressTimer() {
+        if (this._progressTimerId) {
+            GLib.source_remove(this._progressTimerId);
+            this._progressTimerId = null;
+        }
+    }
+
+    _updateProgress() {
+        if (!this._proxy || !this._trackLength || this._trackLength <= 0) {
+            this._progressFraction = 0;
+        } else {
+            try {
+                const pos = Number(this._proxy.Position);
+                this._progressFraction = Math.min(1, Math.max(0, pos / this._trackLength));
+            } catch (e) {
+                this._progressFraction = 0;
+            }
+        }
+        this._progressDraw?.queue_repaint();
+    }
+
+    _drawProgress(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const fraction = this._progressFraction || 0;
+
+        const lw = 2.5;
+        const r = 4;
+        const inset = lw / 2;
+
+        const straightH = w - 2 * r - 2 * inset;
+        const straightV = h - 2 * r - 2 * inset;
+        const cornerArc = (Math.PI / 2) * r;
+        const totalPerimeter = 2 * straightH + 2 * straightV + 4 * cornerArc;
+
+        // Trace rounded rect path starting from top-center, clockwise
+        const tracePath = () => {
+            cr.newPath();
+            cr.moveTo(w / 2, inset);
+            cr.lineTo(w - r - inset, inset);
+            cr.arc(w - r - inset, r + inset, r, -Math.PI / 2, 0);
+            cr.lineTo(w - inset, h - r - inset);
+            cr.arc(w - r - inset, h - r - inset, r, 0, Math.PI / 2);
+            cr.lineTo(r + inset, h - inset);
+            cr.arc(r + inset, h - r - inset, r, Math.PI / 2, Math.PI);
+            cr.lineTo(inset, r + inset);
+            cr.arc(r + inset, r + inset, r, Math.PI, 3 * Math.PI / 2);
+            cr.lineTo(w / 2, inset);
+        };
+
+        cr.setLineWidth(lw);
+        cr.setLineCap(1); // ROUND
+
+        // Background track (full perimeter, very faint)
+        tracePath();
+        cr.setSourceRGBA(1, 1, 1, 0.08);
+        cr.setDash([], 0);
+        cr.stroke();
+
+        // Progress line
+        if (fraction > 0) {
+            const progressLen = fraction * totalPerimeter;
+            tracePath();
+            cr.setSourceRGBA(1, 1, 1, 0.6);
+            cr.setDash([progressLen, totalPerimeter], 0);
+            cr.stroke();
+        }
+
+        cr.$dispose();
+    }
+
+    _fetchWaveform() {
+        if (!this._zonesProxy) return;
+        this._zonesProxy.GetWaveformRemote((result, error) => {
+            if (error || !result || !result[0]) {
+                this._waveformData = null;
+                return;
+            }
+            try {
+                this._waveformData = JSON.parse(result[0]);
+            } catch (e) {
+                this._waveformData = null;
+            }
+        });
+    }
+
+    _startVUTimer() {
+        if (this._vuTimerId) return;
+        this._vuTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 100, () => {
+            this._updateVU();
+            return GLib.SOURCE_CONTINUE;
+        });
+    }
+
+    _stopVUTimer() {
+        if (this._vuTimerId) {
+            GLib.source_remove(this._vuTimerId);
+            this._vuTimerId = null;
+        }
+        // Fade bars to zero
+        this._vuBars.fill(0);
+        this._vuDraw?.queue_repaint();
+    }
+
+    _updateVU() {
+        if (!this._waveformData || !this._waveformData.length ||
+            !this._proxy || !this._trackLength || this._trackLength <= 0) {
+            this._vuBars.fill(0);
+            this._vuDraw?.queue_repaint();
+            return;
+        }
+
+        const pos = Number(this._proxy.Position);
+        const fraction = Math.min(1, Math.max(0, pos / this._trackLength));
+        const centerIdx = Math.floor(fraction * this._waveformData.length);
+        const numBars = this._vuBars.length;
+
+        for (let i = 0; i < numBars; i++) {
+            // Sample at slightly different offsets around current position
+            const offset = (i - numBars / 2) * 3;
+            const idx = Math.min(this._waveformData.length - 1,
+                Math.max(0, centerIdx + Math.round(offset)));
+            let target = this._waveformData[idx] || 0;
+
+            // Add random variation for liveliness
+            target *= 0.7 + Math.random() * 0.6;
+            target = Math.min(1, target);
+
+            // Exponential smoothing — fast attack, slow decay
+            const prev = this._vuBars[i];
+            this._vuBars[i] = target > prev
+                ? target * 0.6 + prev * 0.4   // fast attack
+                : target * 0.2 + prev * 0.8;  // slow decay
+        }
+
+        this._vuDraw?.queue_repaint();
+    }
+
+    _drawVUMeters(area) {
+        const cr = area.get_context();
+        const [w, h] = area.get_surface_size();
+        const numBars = this._vuBars.length;
+        const barSpacing = 6;
+        const barWidth = 16;
+        const totalWidth = numBars * barWidth + (numBars - 1) * barSpacing;
+        const startX = (w - totalWidth) / 2;
+        const r = 2; // rounded corners
+
+        for (let i = 0; i < numBars; i++) {
+            const x = startX + i * (barWidth + barSpacing);
+            const value = this._vuBars[i] || 0;
+            const barH = Math.max(2, value * (h - 4));
+            const y = h - 2 - barH;
+
+            // Background slot
+            cr.setSourceRGBA(1, 1, 1, 0.06);
+            this._roundedRect(cr, x, 2, barWidth, h - 4, r);
+            cr.fill();
+
+            // Active bar
+            if (value > 0.01) {
+                const alpha = 0.3 + value * 0.4;
+                cr.setSourceRGBA(1, 1, 1, alpha);
+                this._roundedRect(cr, x, y, barWidth, barH, r);
+                cr.fill();
+            }
+        }
+
+        cr.$dispose();
+    }
+
+    _roundedRect(cr, x, y, w, h, r) {
+        r = Math.min(r, w / 2, h / 2);
+        cr.newPath();
+        cr.moveTo(x + r, y);
+        cr.lineTo(x + w - r, y);
+        cr.arc(x + w - r, y + r, r, -Math.PI / 2, 0);
+        cr.lineTo(x + w, y + h - r);
+        cr.arc(x + w - r, y + h - r, r, 0, Math.PI / 2);
+        cr.lineTo(x + r, y + h);
+        cr.arc(x + r, y + h - r, r, Math.PI / 2, Math.PI);
+        cr.lineTo(x, y + r);
+        cr.arc(x + r, y + r, r, Math.PI, 3 * Math.PI / 2);
+        cr.closePath();
+    }
+
     destroy() {
+        this._stopVUTimer();
+        this._stopProgressTimer();
         if (this._watchId) {
             Gio.bus_unwatch_name(this._watchId);
             this._watchId = null;

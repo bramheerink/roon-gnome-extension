@@ -1,4 +1,26 @@
 node_modules/
+__pycache__/
 bridge/config.json
 .claude/
 extension/schemas/gschemas.compiled
+
+# Capture/research files
+*.pcapng
+*.pcap
+*.bin
+bridge/captured-messages/
+roon-files/
+
+# One-off research scripts
+analyze_mac_capture.py
+bridge/analyze-capture*.py
+bridge/extract-rpc-calls.py
+bridge/test-*.cjs
+
+# Sooloos library (separate repo)
+sooloos/
+docs/roon-binary-protocol.md
+docs/roon-protocol-research-log.md
+
+# Misc
+charli_xcx.png
